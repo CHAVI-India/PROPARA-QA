@@ -1,0 +1,177 @@
+---
+title: "PROPARA RTTQA Round 1"
+author: "Mr Sougata Maity, Dr Santam Chakraborty"
+format: html
+editor: visual
+echo : false
+message: false
+warning : false
+---
+
+```{r}
+library(tidyverse)
+library(gtsummary)
+library(readxl)
+library(janitor)
+```
+
+```{r}
+setwd(getwd())
+df <- read_xlsx("D:/R/PROPARA/PROPARA QA Round 1 Quantitative.xlsx")
+df |> clean_names() -> df
+
+df |> 
+  filter(!is.na(structure_id_image_id_image_date)) -> df
+```
+
+# Introduction
+
+This is the first iteration of the quality assurance for PROPARA trial. Planning CT scans of two de-identified patients suffering from cervical cancer who gave consent for CHAVI bio banking was used for this. The objective was to determine the discrepancies in the target volume and organ at risk segmentation for the cases. Both cases were segmented by two institutes with a common structure template. The quantitative metrics of volume, dice similarity coefficient and center of mass shifts were obtained from the Contouring statistics module in Eclipse 15.5 workstation. Analysis was done in R.
+
+# Results
+
+First we show all the structures that have been delineated by the institutes. Note that there was discrepancy in the labeling of inferior vena cava, vessels and spinal canal which had to be corrected. In addition when importing into Varian Eclipse TPS it was found the the structure names were altered as the labels were not setup appropriately. These had to be corrected manually in the TPS.
+
+```{r}
+
+df |> 
+  separate(col=structure_id_image_id_image_date,sep="\\/",remove =T, into = c("structure","institute")) |> 
+  mutate(institute = str_remove_all(institute, "\\((.*?)$")) |> 
+  mutate(across(c(structure,institute),~trimws(.))) |> 
+  mutate(structure = case_when(
+    structure == "IVC" ~ "V_CavaInferior",
+    structure == "vessels" ~ "Vessels",
+    structure == "Spinal canal" ~ "SpinalCanal",
+    TRUE ~ structure
+  )) -> df
+```
+
+```{r}
+df |> 
+  select(patient_id,institute,structure) |> 
+  group_by(patient_id,institute,structure) |> 
+  summarise (count = n())  |> 
+  mutate(count = case_when(
+    count > 1 ~ "Yes",
+    count == 1 ~ "Yes"
+  )) |> 
+  pivot_wider(
+    id_cols = c(patient_id,institute), names_from = structure, values_from = count
+  ) |>
+  ungroup() |> 
+  select(-patient_id) |> 
+  tbl_summary(by = institute)
+```
+
+Now we will see the structure wise volumes at different centers.
+
+```{r}
+df |> 
+  select(patient_id,institute,structure,volume_cm_3) |> 
+  distinct(patient_id,institute,structure,volume_cm_3,.keep_all=T) |> 
+  pivot_wider(id_cols = c(patient_id,structure),names_from = institute, values_from = volume_cm_3) |> 
+  select(-patient_id) |> 
+  tbl_summary(by=structure)
+```
+
+Now we will see the Dice similarity coefficients
+
+```{r}
+df |> 
+  filter(institute != reference_structure_set) |> 
+  mutate(comparision = paste(reference_structure_set,institute,sep="-")) |> 
+  select(patient_id,comparision,structure,center_of_mass_shift_x_direction_cm:dice_similarity_coefficient) -> df2
+```
+
+```{r fig.height=10}
+df2 |> 
+  select(patient_id,comparision,structure,dice_similarity_coefficient) |> 
+  filter(comparision != "PGI-KMC") |> 
+  group_by(patient_id) |> 
+  mutate(id = cur_group_id()) |> 
+  mutate(id = as.factor(id)) |> 
+  ggplot(aes(fill = comparision,y = dice_similarity_coefficient, x= id))+
+  geom_bar(position = "dodge",stat = "identity") +
+  annotate("rect",xmin=-Inf, xmax = Inf, ymin = 0.8,ymax=0.9,alpha = 0.4)+
+  facet_wrap(structure~.,ncol = 3) +
+  theme(legend.position = "bottom") +
+  ggtitle("Dice Similiarity Coefficient")
+  
+```
+
+In the above plot, the DSC between institutes is shown. Three possible combinations are illustrated:
+
+1.  KMC - PGI
+2.  KMC - TMC
+3.  PGI - TMC
+
+The horizontal band shows the region of DSC between 0.8 - 0.9 and DSC consistently above this would indicate a high degree of agreement between the structures.
+
+As can be seen good agreement with DSC is seen for the following structures:
+
+1.  Bladder
+2.  Femur
+3.  Kidney
+4.  Liver
+
+Now we will visualize the COM shifts between the structures.
+
+```{r fig.height=10}
+df2 |> 
+  select(patient_id,comparision,structure,center_of_mass_shift_x_direction_cm) |> 
+  filter(comparision != "PGI-KMC") |> 
+  group_by(patient_id) |> 
+  mutate(id = cur_group_id()) |> 
+  mutate(id = as.factor(id)) |> 
+  ggplot(aes(fill = comparision,y = center_of_mass_shift_x_direction_cm, x= id))+
+  geom_bar(position = "dodge",stat = "identity") +
+  facet_wrap(structure~.,ncol = 3) +
+  theme(legend.position = "bottom") +
+  ggtitle("COM Shift in X direction")
+```
+
+```{r fig.height=10}
+df2 |> 
+  select(patient_id,comparision,structure,center_of_mass_shift_y_direction_cm) |> 
+  filter(comparision != "PGI-KMC") |> 
+  group_by(patient_id) |> 
+  mutate(id = cur_group_id()) |> 
+  mutate(id = as.factor(id)) |> 
+  ggplot(aes(fill = comparision,y = center_of_mass_shift_y_direction_cm, x= id))+
+  geom_bar(position = "dodge",stat = "identity") +
+  facet_wrap(structure~.,ncol = 3) +
+  theme(legend.position = "bottom") +
+  ggtitle("COM Shift in Y direction")
+```
+
+```{r fig.height=10}
+df2 |> 
+  select(patient_id,comparision,structure,center_of_mass_shift_z_direction_cm) |> 
+  filter(comparision != "PGI-KMC") |> 
+  group_by(patient_id) |> 
+  mutate(id = cur_group_id()) |> 
+  mutate(id = as.factor(id)) |> 
+  ggplot(aes(fill = comparision,y = center_of_mass_shift_z_direction_cm, x= id))+
+  geom_bar(position = "dodge",stat = "identity") +
+  facet_wrap(structure~.,ncol = 3) +
+  theme(legend.position = "bottom") +
+  ggtitle("COM Shift in Z direction")
+```
+
+Major COM shifts in each of the cardinal axes is shown in the table below:
+
++---------------+---------------+---------------+
+| X axis        | Y axis        | Z axis        |
++===============+===============+===============+
+| Bowel Bag     | Pancreas      | Bone marrow   |
+|               |               |               |
+| Duodenum      | Rectum        | Bowel Bag     |
+|               |               |               |
+| GTV N         | Sigmoid Colon | Rectum        |
+|               |               |               |
+| Sigmoid Colon | Spinal canal  | Sigmoid colon |
+|               |               |               |
+|               |               | Spinal Canal  |
++---------------+---------------+---------------+
+
+Thank you !
